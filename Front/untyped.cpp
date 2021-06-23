@@ -60,6 +60,170 @@ TypeError(String str, Pos &p)
 
 ///////////////////////////////////////////////////////////////////////////////
 //                                                                           //
+//       String extension utils                                              //
+//                                                                           //
+///////////////////////////////////////////////////////////////////////////////
+
+int bits(int size) {
+  int res = 0;
+  for (; size != 0; size >>= 1) {
+    res++;
+  }
+  return res;
+}
+
+Name*
+generateLengthName(Name *stringName)
+{
+  char *n = new char[strlen(stringName->str)+5];
+  sprintf(n, "%s!len", stringName->str);
+  n = symbolTable.insertString(n);
+  Name *lenName = new Name(n, stringName->pos);
+  return lenName;
+}
+
+Name*
+generateBitName(Name *stringName, int bit)
+{
+  char *n = new char[strlen(stringName->str)+13];
+  sprintf(n, "%s!%d", stringName->str, bit);
+  n = symbolTable.insertString(n);
+  Name *bitName = new Name(n, stringName->pos);
+  return bitName;
+}
+
+ASTForm *
+generateStringRestrictions(Name *n, MonaString *s, Alphabet *a, Pos p)
+{
+  IdentList *u = symbolTable.allRealUnivs();
+
+  symbolTable.openLocal();
+ 
+  Name* indexName = generateBitName(n, -1);
+  Ident indexId = symbolTable.insertVar(indexName, Varname1, u, true);
+  IdentList *indexList = new IdentList();
+  indexList->push_back(indexId);
+
+  ASTForm *left = new ASTForm_True(dummyPos), *right = new ASTForm_True(dummyPos);
+  for (IdentList::iterator i = s->bits->begin(); i != s->bits->end(); i++) {
+    ASTForm *iform = new ASTForm_Notin(new ASTTerm1_Var1(indexId, p), new ASTTerm2_Var2(*i, p), p);
+    ASTForm *i1form = new ASTForm_Notin(new ASTTerm1_Plus(new ASTTerm1_Var1(indexId, p), 1, p), new ASTTerm2_Var2(*i, p), p);
+    left = new ASTForm_And(left, iform, p);
+    right = new ASTForm_And(right, i1form, p);
+  }
+
+  ASTForm *limitAst = new ASTForm_Impl(left, right, p);
+  limitAst = new ASTForm_All1(u, indexList, limitAst, p);
+  symbolTable.closeLocal();
+
+  symbolTable.openLocal();
+  ASTForm *valueAst = new ASTForm_True(p);
+  indexId = symbolTable.insertVar(indexName, Varname1, u, true);
+  IdentList *indexList2 = new IdentList();
+  indexList2->push_back(indexId);
+
+  int nosymbols = a->symbols->size();
+  int nobits = s->bits->size();
+
+  ASTForm *prefix = new ASTForm_True(p);
+  ASTForm *suffix;
+  bool prev = true;
+  for (int i = nobits-1; i >= 0; i--) {
+    if (nosymbols & (1 << (i))) {
+      if (!prev) {
+        valueAst = new ASTForm_And(valueAst, new ASTForm_Impl(prefix, suffix, p), p);
+        prev = true;
+      }
+      prefix = new ASTForm_And(prefix, new ASTForm_In(new ASTTerm1_Var1(indexId, p), new ASTTerm2_Var2(s->bits->get(i), p), p), p);
+      
+    } else {
+      if (prev) {
+        suffix = new ASTForm_Notin(new ASTTerm1_Var1(indexId, p), new ASTTerm2_Var2(s->bits->get(i), p), p);
+        prev = false;
+      } else {
+        suffix = new ASTForm_And(suffix, new ASTForm_Notin(new ASTTerm1_Var1(indexId, p), new ASTTerm2_Var2(s->bits->get(i), p), p), p);
+      }
+    }
+  }
+  if (!prev) {
+    valueAst = new ASTForm_And(valueAst, new ASTForm_Impl(prefix, suffix, p), p);
+  }
+
+  valueAst = new ASTForm_All1(u, indexList2, valueAst, p);
+  symbolTable.closeLocal();
+
+  return new ASTForm_And(limitAst, valueAst, p);
+}
+
+MonaString*
+createMonaString(Alphabet* alphabet, Name* name, Pos pos, IdentList* u, ASTForm **restrictions, ASTForm **lengths, bool local = false, bool implicit = false, bool parnames = false)
+{
+  int nobits = bits(alphabet->symbols->size());
+
+  Name *lenName = generateLengthName(name);
+  Ident lenId = symbolTable.insertVar(lenName, parnames ? Parname1 : Varname1, u, local, implicit);
+
+  IdentList *bitIdents = new IdentList();
+  ASTTerm2 *unionBits = new ASTTerm2_Empty(pos);
+  ASTTerm2 *unionBits2 = new ASTTerm2_Empty(pos);
+  ASTTerm2 *unionBits3 = new ASTTerm2_Empty(pos);
+
+  for (int i = 0; i < nobits; i++) {
+    Name* bitName = generateBitName(name, i);
+    Ident bitIdent = symbolTable.insertVar(bitName, parnames ? Parname2 : Varname2, u, local, implicit);
+    bitIdents->push_back(bitIdent);
+    unionBits = new ASTTerm2_Union(unionBits, new ASTTerm2_Var2(bitIdent, pos), pos);
+    unionBits2 = new ASTTerm2_Union(unionBits2, new ASTTerm2_Var2(bitIdent, pos), pos);
+    unionBits3 = new ASTTerm2_Union(unionBits3, new ASTTerm2_Var2(bitIdent, pos), pos);
+  }
+
+  MonaString *monaString = new MonaString();
+  monaString->alphabet = alphabet->id;
+  monaString->bits = bitIdents;
+  monaString->length = lenId;
+
+  symbolTable.insertMonaString(name, monaString, implicit);
+
+  ASTForm *unionEmpty = new ASTForm_EmptyPred(unionBits2, pos);
+  ASTForm *unionNotEmpty = new ASTForm_Not(new ASTForm_EmptyPred(unionBits3, pos), pos);
+
+  ASTForm *lenEmptyAst = new ASTForm_Equal1(new ASTTerm1_Int(0, pos), new ASTTerm1_Var1(lenId, pos), pos);
+  ASTForm *lenAst = new ASTForm_Equal1(new ASTTerm1_Plus(new ASTTerm1_Max(unionBits, pos), 1, pos), new ASTTerm1_Var1(lenId, pos), pos);
+  lenEmptyAst = new ASTForm_Impl(unionEmpty, lenEmptyAst, pos);
+  lenAst = new ASTForm_Impl(unionNotEmpty, lenAst, pos);
+  lenAst = new ASTForm_And(lenAst, lenEmptyAst, pos);
+
+  ASTForm *restriction = generateStringRestrictions(name, monaString, alphabet, pos); // size/stop restriction
+  if (restrictions)
+    *restrictions = new ASTForm_And(*restrictions, restriction, pos);
+  if (lengths)
+    *lengths = new ASTForm_And(*lengths, lenAst, pos);
+
+  return monaString;
+}
+
+ASTForm *indexForm = new ASTForm_True(dummyPos);
+IdentList *indexVars = new IdentList();
+
+// needs to be used at all places whete AST goes from oForm to higher order
+ASTForm *
+handleStringIndexing(ASTForm *inner, Pos pos)
+{
+  if (indexVars->size() > 0) {
+    ASTForm *res = new ASTForm_And(indexForm, inner, pos);
+    IdentList *u = symbolTable.allRealUnivs();
+    res = new ASTForm_Ex1(u, indexVars, res, pos);
+    indexForm = new ASTForm_True(dummyPos);
+    indexVars = new IdentList();
+    return res;
+  } else {
+    return inner;
+  }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//                                                                           //
 //       Arithmetic expressions                                              //
 //                                                                           //
 ///////////////////////////////////////////////////////////////////////////////
@@ -252,7 +416,14 @@ UntypedExp_Name::genAST()
 
       return new ASTForm_Call(id, empty, pos);
     }
-  
+  case VarnameChar:
+    {
+      MonaChar *c = symbolTable.lookupMonaChar(id);
+      return new ASTTerm1_Var1(c->var1id, pos);
+    }
+  case VarnameStr:
+    return new ASTString_Name(id, pos);
+    
   case Constname:
   default:
     return new ASTTerm1_Int(symbolTable.lookupValue(name), pos);
@@ -284,7 +455,7 @@ UntypedExp_In::genAST()
   if (t1->order != oTerm1 || T2->order != oTerm2)
     TypeError("Type mismatch at 'in'", pos);
 
-  return new ASTForm_In((ASTTerm1 *) t1, (ASTTerm2 *) T2, pos);
+  return handleStringIndexing(new ASTForm_In((ASTTerm1 *) t1, (ASTTerm2 *) T2, pos), pos);
 }
 
 //////////  UntypedExp_NotIn //////////////////////////////////////////////////
@@ -298,7 +469,7 @@ UntypedExp_NotIn::genAST()
   if (t1->order != oTerm1 || T2->order != oTerm2)
     TypeError("Type mismatch at 'notin'", pos);
 
-  return new ASTForm_Notin((ASTTerm1 *) t1, (ASTTerm2 *) T2, pos);
+  return handleStringIndexing(new ASTForm_Notin((ASTTerm1 *) t1, (ASTTerm2 *) T2, pos), pos);
 }
 
 //////////  UntypedExp_Min ////////////////////////////////////////////////////
@@ -412,7 +583,7 @@ UntypedExp_Less::genAST()
   if (t1->order != oTerm1 || t2->order != oTerm1)
     TypeError("Type mismatch at '<'", pos);
 
-  return new ASTForm_Less((ASTTerm1 *) t1, (ASTTerm1 *) t2, pos);
+  return handleStringIndexing(new ASTForm_Less((ASTTerm1 *) t1, (ASTTerm1 *) t2, pos), pos);
 }
 
 //////////  UntypedExp_LessEq /////////////////////////////////////////////////
@@ -426,7 +597,7 @@ UntypedExp_LessEq::genAST()
   if (t1->order != oTerm1 || t2->order != oTerm1)
     TypeError("Type mismatch at '<='", pos);
 
-  return new ASTForm_LessEq((ASTTerm1 *) t1, (ASTTerm1 *) t2, pos);
+  return handleStringIndexing(new ASTForm_LessEq((ASTTerm1 *) t1, (ASTTerm1 *) t2, pos), pos);
 }
 
 //////////  UntypedExp_Greater ////////////////////////////////////////////////
@@ -440,7 +611,7 @@ UntypedExp_Greater::genAST()
   if (t1->order != oTerm1 || t2->order != oTerm1)
     TypeError("Type mismatch at '>'", pos);
 
-  return new ASTForm_Less((ASTTerm1 *) t2, (ASTTerm1 *) t1, pos);
+  return handleStringIndexing(new ASTForm_Less((ASTTerm1 *) t2, (ASTTerm1 *) t1, pos), pos);
 }
 
 //////////  UntypedExp_GreaterEq //////////////////////////////////////////////
@@ -454,7 +625,7 @@ UntypedExp_GreaterEq::genAST()
   if (t1->order != oTerm1 || t2->order != oTerm1)
     TypeError("Type mismatch at '>='", pos);
 
-  return new ASTForm_LessEq((ASTTerm1 *) t2, (ASTTerm1 *) t1, pos);
+  return handleStringIndexing(new ASTForm_LessEq((ASTTerm1 *) t2, (ASTTerm1 *) t1, pos), pos);
 }
 
 //////////  UntypedExp_Equal //////////////////////////////////////////////////
@@ -464,6 +635,7 @@ UntypedExp_Equal::genAST()
 {
   AST *e1 = exp1->genAST();
   AST *e2 = exp2->genAST();
+
   AST *result = 0;
   
   if (e1->order == oTerm1 && e2->order == oTerm1)
@@ -473,6 +645,7 @@ UntypedExp_Equal::genAST()
   else
     TypeError("Type mismatch at '='", pos);
 
+  result = handleStringIndexing((ASTForm *) result, pos);
   return result;
 }
 
@@ -492,6 +665,7 @@ UntypedExp_NotEqual::genAST()
   else 
     TypeError("Type mismatch at '~='", pos);
 
+  result = handleStringIndexing((ASTForm *) result, pos);
   return result;
 }
 
@@ -543,9 +717,15 @@ AST*
 UntypedExp_Impl::genAST() 
 { 
   AST *f1 = exp1->genAST();
-  AST *f2 = exp2->genAST();
+  f1 = handleStringIndexing((ASTForm *) f1, pos);
 
-  if (f1->order != oForm || f2->order != oForm)
+  if (f1->order != oForm)
+    TypeError("Type mismatch at '=>'", pos);
+
+  AST *f2 = exp2->genAST();
+  f2 = handleStringIndexing((ASTForm *) f2, pos);
+
+  if (f2->order != oForm)
     TypeError("Type mismatch at '=>'", pos);
 
   return new ASTForm_Impl((ASTForm *) f1, (ASTForm *) f2, pos); 
@@ -557,9 +737,15 @@ AST*
 UntypedExp_Biimpl::genAST() 
 { 
   AST *f1 = exp1->genAST();
-  AST *f2 = exp2->genAST();
+  f1 = handleStringIndexing((ASTForm *) f1, pos);
 
-  if (f1->order != oForm || f2->order != oForm)
+  if (f1->order != oForm)
+    TypeError("Type mismatch at '<=>'", pos);
+
+  AST *f2 = exp2->genAST();
+  f2 = handleStringIndexing((ASTForm *) f2, pos);
+
+  if (f2->order != oForm)
     TypeError("Type mismatch at '<=>'", pos);
 
   return new ASTForm_Biimpl((ASTForm *) f1, (ASTForm *) f2, pos); 
@@ -572,9 +758,15 @@ AST*
 UntypedExp_And::genAST() 
 { 
   AST *f1 = exp1->genAST();
-  AST *f2 = exp2->genAST();
+  f1 = handleStringIndexing((ASTForm *) f1, pos);
 
-  if (f1->order != oForm || f2->order != oForm)
+  if (f1->order != oForm)
+    TypeError("Type mismatch at '&'", pos);
+
+  AST *f2 = exp2->genAST();
+  f2 = handleStringIndexing((ASTForm *) f2, pos);
+
+  if (f2->order != oForm)
     TypeError("Type mismatch at '&'", pos);
 
   return new ASTForm_And((ASTForm *) f1, (ASTForm *) f2, pos); 
@@ -586,9 +778,15 @@ AST*
 UntypedExp_Or::genAST() 
 { 
   AST *f1 = exp1->genAST();
-  AST *f2 = exp2->genAST();
+  f1 = handleStringIndexing((ASTForm *) f1, pos);
 
-  if (f1->order != oForm || f2->order != oForm)
+  if (f1->order != oForm)
+    TypeError("Type mismatch at '|'", pos);
+
+  AST *f2 = exp2->genAST();
+  f2 = handleStringIndexing((ASTForm *) f2, pos);
+
+  if (f2->order != oForm)
     TypeError("Type mismatch at '|'", pos);
 
   return new ASTForm_Or((ASTForm *) f1, (ASTForm *) f2, pos); 
@@ -603,7 +801,8 @@ UntypedExp_Not::genAST()
 
   if (f->order != oForm)
     TypeError("Type mismatch at '~'", pos);
-
+  
+  f = handleStringIndexing((ASTForm *) f, pos);
   return new ASTForm_Not((ASTForm *) f, pos); 
 }
 
@@ -680,7 +879,7 @@ UntypedExp_Ex0::genAST()
       AST *f = (*d)->where->genAST();
       if (f->order != oForm)
 	TypeError("Type mismatch at 'where' expression", (*d)->pos);
-      
+      f = handleStringIndexing((ASTForm *) f, pos);
       symbolTable.updateRestriction(id, (ASTForm *) f);
     }
   }
@@ -691,6 +890,7 @@ UntypedExp_Ex0::genAST()
   if (f->order != oForm)
     TypeError("Type mismatch at 'ex0'", pos);
 
+  f = handleStringIndexing((ASTForm *) f, pos);
   AST *result = new ASTForm_Ex0(idents, (ASTForm *) f, pos);
 
   symbolTable.closeLocal();
@@ -721,7 +921,7 @@ UntypedExp_Ex1::genAST()
       AST *f = (*d)->where->genAST();
       if (f->order != oForm)
 	TypeError("Type mismatch at 'where' expression", (*d)->pos);
-      
+      f = handleStringIndexing((ASTForm *) f, pos);
       symbolTable.updateRestriction(id, (ASTForm *) f);
     }
   }
@@ -738,6 +938,7 @@ UntypedExp_Ex1::genAST()
   if (f->order != oForm)
     TypeError("Type mismatch at 'ex1'", pos);
 
+  f = handleStringIndexing((ASTForm *) f, pos);
   AST *result = new ASTForm_Ex1(univIdents, idents, (ASTForm *) f, pos);
 
   symbolTable.closeLocal();
@@ -768,7 +969,7 @@ UntypedExp_Ex2::genAST()
       AST *f = (*d)->where->genAST();
       if (f->order != oForm)
 	TypeError("Type mismatch at 'where' expression", (*d)->pos);
-      
+      f = handleStringIndexing((ASTForm *) f, pos);
       symbolTable.updateRestriction(id, (ASTForm *) f);
     }
   }
@@ -785,6 +986,7 @@ UntypedExp_Ex2::genAST()
   if (f->order != oForm)
     TypeError("Type mismatch at 'ex2'", pos);
 
+  f = handleStringIndexing((ASTForm *) f, pos);
   AST *result = new ASTForm_Ex2(univIdents, idents, (ASTForm *) f, pos);
 
   symbolTable.closeLocal();
@@ -815,7 +1017,7 @@ UntypedExp_All0::genAST()
       AST *f = (*d)->where->genAST();
       if (f->order != oForm)
 	TypeError("Type mismatch at 'where' expression", (*d)->pos);
-      
+      f = handleStringIndexing((ASTForm *) f, pos);
       symbolTable.updateRestriction(id, (ASTForm *) f);
     }
   }
@@ -826,6 +1028,7 @@ UntypedExp_All0::genAST()
   if (f->order != oForm)
     TypeError("Type mismatch at 'all0'", pos);
 
+  f = handleStringIndexing((ASTForm *) f, pos);
   AST *result = new ASTForm_All0(idents, (ASTForm *) f, pos);
 
   symbolTable.closeLocal();
@@ -856,7 +1059,7 @@ UntypedExp_All1::genAST()
       AST *f = (*d)->where->genAST();
       if (f->order != oForm)
 	TypeError("Type mismatch at 'where' expression", (*d)->pos);
-      
+      f = handleStringIndexing((ASTForm *) f, pos);
       symbolTable.updateRestriction(id, (ASTForm *) f);
     }
   }
@@ -873,6 +1076,7 @@ UntypedExp_All1::genAST()
   if (f->order != oForm)
     TypeError("Type mismatch at 'all1'", pos);
 
+  f = handleStringIndexing((ASTForm *) f, pos);
   AST *result = new ASTForm_All1(univIdents, idents, (ASTForm *) f, pos);
 
   symbolTable.closeLocal();
@@ -903,7 +1107,7 @@ UntypedExp_All2::genAST()
       AST *f = (*d)->where->genAST();
       if (f->order != oForm)
 	TypeError("Type mismatch at 'where' expression", (*d)->pos);
-      
+      f = handleStringIndexing((ASTForm *) f, pos);
       symbolTable.updateRestriction(id, (ASTForm *) f);
     }
   }
@@ -920,6 +1124,7 @@ UntypedExp_All2::genAST()
   if (f->order != oForm)
     TypeError("Type mismatch at 'all2'", pos);
 
+  f = handleStringIndexing((ASTForm *) f, pos);
   AST *result = new ASTForm_All2(univIdents, idents, (ASTForm *) f, pos);
 
   symbolTable.closeLocal();
@@ -948,6 +1153,7 @@ UntypedExp_Let0::genAST()
     if (t->order != oForm) 
       TypeError("Type mismatch at 'let0' in definition of '"
 		+ String(((*n)->name)->str) +"'", (*n)->pos);
+    t = handleStringIndexing((ASTForm *) t, pos);
     forms->push_back((ASTForm* ) t);
   }
  
@@ -962,6 +1168,7 @@ UntypedExp_Let0::genAST()
   if (t->order != oForm)
     TypeError("Type mismatch at 'let0' expression", pos);
 
+  t = handleStringIndexing((ASTForm *) t, pos);
   AST *result = new ASTForm_Let0(idents, forms, (ASTForm *) t, pos);
 
   symbolTable.closeLocal();
@@ -1004,6 +1211,7 @@ UntypedExp_Let1::genAST()
   if (t->order != oForm)
     TypeError("Type mismatch at 'let1' expression", pos);
 
+  t = handleStringIndexing((ASTForm *) t, pos);
   AST *result = new ASTForm_Let1(idents, terms, (ASTForm *) t, pos);
 
   symbolTable.closeLocal();
@@ -1046,6 +1254,7 @@ UntypedExp_Let2::genAST()
   if (t->order != oForm)
     TypeError("Type mismatch at 'let2' expression", pos);
 
+  t = handleStringIndexing((ASTForm *) t, pos);
   AST *result = new ASTForm_Let2(idents, terms, (ASTForm *) t, pos);
 
   symbolTable.closeLocal();
@@ -1080,9 +1289,22 @@ UntypedExp_Call::genAST()
   
   ASTList *par = new ASTList;
   if (expList)
-    for (UntypedExpList::iterator i = expList->begin(); 
-	 i != expList->end(); i++)
-      par->push_back((*i)->genAST());
+    for (UntypedExpList::iterator i = expList->begin(); i != expList->end(); i++) {
+      AST *ast = (*i)->genAST();
+      if (ast->kind == aStringName) {
+        MonaString *s = symbolTable.lookupMonaString(((ASTString_Name *)ast)->ident);
+        par->push_back(new ASTTerm1_Var1(s->length, pos));
+        for (IdentList::iterator j = s->bits->begin(); j != s->bits->end(); j++) {
+          par->push_back(new ASTTerm2_Var2(*j, pos));
+        }
+      } else {
+        if (ast->order == oForm) {
+          ast = handleStringIndexing((ASTForm *) ast, pos);
+        }
+        par->push_back(ast);
+      }
+    }
+      
   
   Ident id = symbolTable.lookupIdent(name);
   int no;
@@ -1394,7 +1616,9 @@ UntypedExp_Export::genAST()
   if (f->order != oForm)
     TypeError("Type mismatch at 'export'", pos);
 
-  return new ASTForm_Export((ASTForm *) f, file, pos); 
+  ASTForm *form = handleStringIndexing((ASTForm *) f, pos);
+
+  return new ASTForm_Export(form, file, pos); 
 }
  
 
@@ -1411,7 +1635,10 @@ UntypedExp_Prefix::genAST()
   if (f->order != oForm)
     TypeError("Type mismatch at 'prefix'", pos);
 
-  return new ASTForm_Prefix((ASTForm *) f, pos); 
+
+  ASTForm *form = handleStringIndexing((ASTForm *) f, pos);
+
+  return new ASTForm_Prefix(form, pos); 
 }
 
 //////////  UntypedExp_InStateSpace ///////////////////////////////////////////
@@ -1643,6 +1870,8 @@ Predicate_Macro_Declaration::genAST(MonaAST &)
 
   ParDeclList::iterator d;
   MonaTypeTag parKind = (MonaTypeTag) -1;
+  ASTForm *restrictions = new ASTForm_True(pos);
+  ASTForm *lengths = new ASTForm_True(pos);
   for (d = parameters->begin(); d != parameters->end(); d++) {
     switch ((*d)->kind) { 
     case pPar0:
@@ -1657,6 +1886,33 @@ Predicate_Macro_Declaration::genAST(MonaAST &)
     case pParU:
       parKind = ParnameU;
       break;
+    case pParS:
+      {
+        StrParDecl *strdcl = (StrParDecl *) (*d);
+        Alphabet *a = symbolTable.lookupAlphabet(strdcl->alphabet);
+        IdentList *u = symbolTable.allRealUnivs();
+        
+        MonaString *ms = createMonaString(a, (*d)->name, (*d)->pos, u, &restrictions, &lengths, true, false, true);
+        formalIdents->push_back(ms->length);
+        boundIdents->push_back(ms->length);
+        formalIdents->append(ms->bits);
+        boundIdents->append(ms->bits);
+        // TODO: where, defaultwhere
+        continue;
+      }
+    case pParC:
+      {
+        CharParDecl *chdecl = (CharParDecl *) (*d);
+        Alphabet *a = symbolTable.lookupAlphabet(chdecl->alphabet);
+        IdentList *u = symbolTable.allRealUnivs();
+
+        MonaChar *monaChar = new MonaChar();
+        monaChar->alphabet = a->id;
+        monaChar->var1id = symbolTable.insertVar(generateBitName((*d)->name, 0), Parname1, u, true);
+        formalIdents->push_back(monaChar->var1id);
+        boundIdents->push_back(monaChar->var1id);
+        continue;
+      }
     case pPar:
       //      if (parKind == -1)
       //	TypeError("Parameter type missing in declaration of '" 
@@ -1665,7 +1921,7 @@ Predicate_Macro_Declaration::genAST(MonaAST &)
     }
 
     if ((*d)->where && parKind != Parname1 && parKind != Parname2)
-	TypeError("'where' only allowed at var1/var2", (*d)->pos);
+	    TypeError("'where' only allowed at var1/var2", (*d)->pos);
 
     ident = symbolTable.insertVar((*d)->name, parKind, NULL, true); //univs??????
     
@@ -1676,7 +1932,7 @@ Predicate_Macro_Declaration::genAST(MonaAST &)
       AST *f = (*d)->where->genAST(); 
       // (restriction shouldn't be allowed to access other parameter vars.)
       if (f->order != oForm)
-	TypeError("Type mismatch at 'where' expression", (*d)->pos);
+	      TypeError("Type mismatch at 'where' expression", (*d)->pos);
       symbolTable.updateRestriction(ident, (ASTForm *) f);
     }
 
@@ -1685,7 +1941,7 @@ Predicate_Macro_Declaration::genAST(MonaAST &)
     ASTForm *fil = symbolTable.getRestriction(ident, &d);
     if (fil) {
       if (d != -1)
-	boundIdents->insert(d); // skip the defaultwhere formal      
+	      boundIdents->insert(d); // skip the defaultwhere formal      
       fil->freeVars(freeIdents, boundIdents);
     }
   }  
@@ -1693,17 +1949,18 @@ Predicate_Macro_Declaration::genAST(MonaAST &)
   AST *f = body->genAST();
 
   if (f->order != oForm)
-    TypeError("Type mismatch at declaration of '" + 
-	      String(name->str) + "'", pos);
+    TypeError("Type mismatch at declaration of '" + String(name->str) + "'", pos);
 
-  ((ASTForm *) f)->freeVars(freeIdents, boundIdents);
+  ASTForm *form = handleStringIndexing((ASTForm *) f, pos);
 
+
+  form->freeVars(freeIdents, boundIdents);
+  
   symbolTable.closeLocal();
 
   int id = symbolTable.insertPred(name);
 
-  predicateLib.insert(formalIdents, freeIdents, boundIdents,
-		      (ASTForm *) f, kind == dMacro, id, source);
+  predicateLib.insert(formalIdents, freeIdents, boundIdents, form, kind == dMacro, id, source);
 
   predMacroEncountered = true;
 }
@@ -1760,8 +2017,8 @@ Variable_Declaration::genAST(MonaAST &monaAST)
       AST *f = (*d)->where->genAST();
       if (f->order != oForm)
 	TypeError("Type mismatch at 'where' expression", (*d)->pos);
-
-      symbolTable.updateRestriction(id, (ASTForm *) f);
+      ASTForm *form = handleStringIndexing((ASTForm *) f, pos);
+      symbolTable.updateRestriction(id, form);
     }
   }
 }
@@ -1838,7 +2095,8 @@ Expression_Declaration::genAST(MonaAST &monaAST)
   if (f->order != oForm)
     TypeError("Type mismatch at expression", pos);
 
-  monaAST.formula = new ASTForm_And(monaAST.formula, (ASTForm *) f, dummyPos);
+  ASTForm *form = handleStringIndexing((ASTForm *) f, pos);
+  monaAST.formula = new ASTForm_And(monaAST.formula, form, dummyPos);
 }
  
 //////////  Verify_Declaration ////////////////////////////////////////////////
@@ -1880,8 +2138,8 @@ Assertion_Declaration::genAST(MonaAST &monaAST)
   if (f->order != oForm)
     TypeError("Type mismatch at 'assert'", pos);
 
-  monaAST.assertion = new ASTForm_And(monaAST.assertion, (ASTForm *) f, 
-				      dummyPos);
+  ASTForm *form = handleStringIndexing((ASTForm *) f, pos);
+  monaAST.assertion = new ASTForm_And(monaAST.assertion, form, dummyPos);
 }
  
 //////////  Constant_Declaration //////////////////////////////////////////////
@@ -2029,24 +2287,19 @@ MonaUntypedAST::typeCheck()
       exp1 = new UntypedExp_Name(new Name(varP, dummyPos), dummyPos);
       exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
       exp = new UntypedExp_Sub(exp1, exp2, dummyPos);
-      declarations->push_front
-	(new Default_Declaration(vVar2, new Name(varP, dummyPos), 
-				 exp, dummyPos));
+      declarations->push_front(new Default_Declaration(vVar2, new Name(varP, dummyPos), exp, dummyPos));
       
       // defaultwhere1(p) = p in $;
       exp1 = new UntypedExp_Name(new Name(varp, dummyPos), dummyPos);
       exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
       exp = new UntypedExp_In(exp1, exp2, dummyPos);
-      declarations->push_front
-	(new Default_Declaration(vVar1, new Name(varp, dummyPos), 
-				 exp, dummyPos));
+      declarations->push_front(new Default_Declaration(vVar1, new Name(varp, dummyPos), exp, dummyPos));
 
       // allpos $;
-      declarations->push_front
-	(new AllPos_Declaration(new Name(vardol, dummyPos), dummyPos));
+      declarations->push_front(new AllPos_Declaration(new Name(vardol, dummyPos), dummyPos));
 
       // var2 $ where all1 p where true: (p in $) => ((p^ in $) | (p^=p));
-/*#warning bugfix: 'where true'*/
+      /*#warning bugfix: 'where true'*/
       exp1 = new UntypedExp_Name(new Name(varp, dummyPos), dummyPos);
       exp1 = new UntypedExp_Up(exp1, dummyPos);
       exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
@@ -2067,104 +2320,83 @@ MonaUntypedAST::typeCheck()
       exp = new UntypedExp_Impl(exp1, exp, dummyPos);
 
       vlist = new VarDeclList(); 
-      vlist->push_back(new VarDecl(new Name(varp, dummyPos), 
-				   new UntypedExp_True(dummyPos), dummyPos));
+      vlist->push_back(new VarDecl(new Name(varp, dummyPos), new UntypedExp_True(dummyPos), dummyPos));
       exp = new UntypedExp_All1(NULL, vlist, exp, dummyPos);
 
       vlist = new VarDeclList(); 
       vlist->push_back(new VarDecl(new Name(vardol, dummyPos), exp, dummyPos));
-      declarations->push_front
-	(new Variable_Declaration(vVar2, NULL, vlist, dummyPos));
+      declarations->push_front(new Variable_Declaration(vVar2, NULL, vlist, dummyPos));
     }
     else {
       if (options.alternativeM2LStr) {
-	// m2l-str --> linear;
-	//             var1 $ where true;
-	//             lastpos $;
-	//             defaultwhere1(p) = p <= $;
-	//             defaultwhere2(P) = P sub {0,...,$};
-	
-	// defaultwhere2(P) = P sub {0,...,$};
-	elist = new UntypedExpList();
-	elist->push_back(new UntypedExp_Int(0, dummyPos));
-	elist->push_back(new UntypedExp_Interval(dummyPos));
-	elist->push_back(new UntypedExp_Name(new Name(vardol, dummyPos), 
-					     dummyPos));
-	exp1 = new UntypedExp_Name(new Name(varP, dummyPos), dummyPos);
-	exp2 = new UntypedExp_Set(elist, dummyPos);
-	exp = new UntypedExp_Sub(exp1, exp2, dummyPos);
-	declarations->push_front
-	  (new Default_Declaration(vVar2, new Name(varP, dummyPos), 
-				   exp, dummyPos));
-	
-	// defaultwhere1(p) = p <= $;
-	exp1 = new UntypedExp_Name(new Name(varp, dummyPos), dummyPos);
-	exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
-	exp = new UntypedExp_LessEq(exp1, exp2, dummyPos);
-	declarations->push_front
-	  (new Default_Declaration(vVar1, new Name(varp, dummyPos), 
-				   exp, dummyPos));
-	
-	// lastpos $;
-	declarations->push_front
-	  (new LastPos_Declaration(new Name(vardol, dummyPos), dummyPos));
+        // m2l-str --> linear;
+        //             var1 $ where true;
+        //             lastpos $;
+        //             defaultwhere1(p) = p <= $;
+        //             defaultwhere2(P) = P sub {0,...,$};
         
-	// var1 $ where true;
-	vlist = new VarDeclList(); 
-	vlist->push_back(new VarDecl(new Name(vardol, dummyPos), 
-				     new UntypedExp_True(dummyPos), 
-				     dummyPos));
-	declarations->push_front
-	  (new Variable_Declaration(vVar1, NULL, vlist, dummyPos));
-      }
-      else {
-	// m2l-str --> linear;
-	//             var2 $ where ~ex1 p where true: p notin $ & p+1 in $;
-	//             allpos $;
-	//             defaultwhere1(p) = p in $;
-	//             defaultwhere2(P) = P sub $;
+        // defaultwhere2(P) = P sub {0,...,$};
+        elist = new UntypedExpList();
+        elist->push_back(new UntypedExp_Int(0, dummyPos));
+        elist->push_back(new UntypedExp_Interval(dummyPos));
+        elist->push_back(new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos));
+        exp1 = new UntypedExp_Name(new Name(varP, dummyPos), dummyPos);
+        exp2 = new UntypedExp_Set(elist, dummyPos);
+        exp = new UntypedExp_Sub(exp1, exp2, dummyPos);
+        declarations->push_front(new Default_Declaration(vVar2, new Name(varP, dummyPos), exp, dummyPos));
+        
+        // defaultwhere1(p) = p <= $;
+        exp1 = new UntypedExp_Name(new Name(varp, dummyPos), dummyPos);
+        exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
+        exp = new UntypedExp_LessEq(exp1, exp2, dummyPos);
+        declarations->push_front(new Default_Declaration(vVar1, new Name(varp, dummyPos), exp, dummyPos));
+        
+        // lastpos $;
+        declarations->push_front(new LastPos_Declaration(new Name(vardol, dummyPos), dummyPos));
+              
+        // var1 $ where true;
+        vlist = new VarDeclList(); 
+        vlist->push_back(new VarDecl(new Name(vardol, dummyPos), new UntypedExp_True(dummyPos), dummyPos));
+        declarations->push_front(new Variable_Declaration(vVar1, NULL, vlist, dummyPos));
+            }
+            else {
+        // m2l-str --> linear;
+        //             var2 $ where ~ex1 p where true: p notin $ & p+1 in $;
+        //             allpos $;
+        //             defaultwhere1(p) = p in $;
+        //             defaultwhere2(P) = P sub $;
 
-	// defaultwhere2(P) = P sub $;
-	exp1 = new UntypedExp_Name(new Name(varP, dummyPos), dummyPos);
-	exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
-	exp = new UntypedExp_Sub(exp1, exp2, dummyPos);
-	declarations->push_front
-	  (new Default_Declaration(vVar2, new Name(varP, dummyPos), 
-				   exp, dummyPos));
-	
-	// defaultwhere1(p) = p in $;
-	exp1 = new UntypedExp_Name(new Name(varp, dummyPos), dummyPos);
-	exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
-	exp = new UntypedExp_In(exp1, exp2, dummyPos);
-	declarations->push_front
-	  (new Default_Declaration(vVar1, new Name(varp, dummyPos), 
-				   exp, dummyPos));
-	
-	// allpos $;
-	declarations->push_front
-	  (new AllPos_Declaration(new Name(vardol, dummyPos), dummyPos));
-	
-	// var2 $ where ~ex1 p where true: p notin $ & p+1 in $;
-	exp1 = new UntypedExp_Name(new Name(varp, dummyPos), dummyPos);
-	exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
-	exp = new UntypedExp_NotIn(exp1, exp2, dummyPos);
-	exp1 = new UntypedExp_Name(new Name(varp, dummyPos), dummyPos);
-	exp1 = new UntypedExp_Plus(exp1, new ArithExp_Integer(1, dummyPos), 
-				   dummyPos);
-	exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
-	exp2 = new UntypedExp_In(exp1, exp2, dummyPos);
-	exp = new UntypedExp_And(exp, exp2, dummyPos);
-	vlist = new VarDeclList(); 
-	vlist->push_back(new VarDecl(new Name(varp, dummyPos), 
-				     new UntypedExp_True(dummyPos), 
-				     dummyPos));
-	exp = new UntypedExp_Ex1(NULL, vlist, exp, dummyPos);
-	exp = new UntypedExp_Not(exp, dummyPos);
-	vlist = new VarDeclList(); 
-	vlist->push_back(new VarDecl(new Name(vardol, dummyPos), 
-				     exp, dummyPos));
-	declarations->push_front
-	  (new Variable_Declaration(vVar2, NULL, vlist, dummyPos));
+        // defaultwhere2(P) = P sub $;
+        exp1 = new UntypedExp_Name(new Name(varP, dummyPos), dummyPos);
+        exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
+        exp = new UntypedExp_Sub(exp1, exp2, dummyPos);
+        declarations->push_front(new Default_Declaration(vVar2, new Name(varP, dummyPos), exp, dummyPos));
+        
+        // defaultwhere1(p) = p in $;
+        exp1 = new UntypedExp_Name(new Name(varp, dummyPos), dummyPos);
+        exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
+        exp = new UntypedExp_In(exp1, exp2, dummyPos);
+        declarations->push_front(new Default_Declaration(vVar1, new Name(varp, dummyPos), exp, dummyPos));
+        
+        // allpos $;
+        declarations->push_front(new AllPos_Declaration(new Name(vardol, dummyPos), dummyPos));
+        
+        // var2 $ where ~ex1 p where true: p notin $ & p+1 in $;
+        exp1 = new UntypedExp_Name(new Name(varp, dummyPos), dummyPos);
+        exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
+        exp = new UntypedExp_NotIn(exp1, exp2, dummyPos);
+        exp1 = new UntypedExp_Name(new Name(varp, dummyPos), dummyPos);
+        exp1 = new UntypedExp_Plus(exp1, new ArithExp_Integer(1, dummyPos), dummyPos);
+        exp2 = new UntypedExp_Name(new Name(vardol, dummyPos), dummyPos);
+        exp2 = new UntypedExp_In(exp1, exp2, dummyPos);
+        exp = new UntypedExp_And(exp, exp2, dummyPos);
+        vlist = new VarDeclList(); 
+        vlist->push_back(new VarDecl(new Name(varp, dummyPos), new UntypedExp_True(dummyPos), dummyPos));
+        exp = new UntypedExp_Ex1(NULL, vlist, exp, dummyPos);
+        exp = new UntypedExp_Not(exp, dummyPos);
+        vlist = new VarDeclList(); 
+        vlist->push_back(new VarDecl(new Name(vardol, dummyPos), exp, dummyPos));
+        declarations->push_front(new Variable_Declaration(vVar2, NULL, vlist, dummyPos));
       }
     }
   }
@@ -2177,12 +2409,10 @@ MonaUntypedAST::typeCheck()
       numTypes++;
     }
   }
-  if (numTypes > 0)
-    initTreetypes(numTypes);
+  if (numTypes > 0) initTreetypes(numTypes);
   
   // iterate through guide/universe/type declarations
-  for (DeclarationList::iterator decl = declarations->begin(); 
-       decl != declarations->end(); decl++)
+  for (DeclarationList::iterator decl = declarations->begin(); decl != declarations->end(); decl++)
     switch ((*decl)->kind) {
     case dGuide:
     case dUniverse:
@@ -2190,16 +2420,13 @@ MonaUntypedAST::typeCheck()
       (*decl)->genAST(*monaAST);
     default: ;
     }
-  if (numTypes > 0)
-    setComponentTypes();
+  if (numTypes > 0) setComponentTypes();
 
   // make GTA guide
-  if (options.mode == TREE)
-    makeGTAGuide();
+  if (options.mode == TREE) makeGTAGuide();
 
   // make AST of other declarations
-  for (DeclarationList::iterator decl = declarations->begin(); 
-       decl != declarations->end(); decl++)
+  for (DeclarationList::iterator decl = declarations->begin(); decl != declarations->end(); decl++)
     switch ((*decl)->kind) {
     case dGuide:
     case dUniverse:
@@ -2212,4 +2439,283 @@ MonaUntypedAST::typeCheck()
     }
   
   return monaAST;
+}
+
+//////////////////////////////////////////////////////////
+/////////////////// String Extension /////////////////////
+//////////////////////////////////////////////////////////
+
+void
+Alphabet_Declaration::genAST(MonaAST &monaAST)
+{
+  //std::cout << "Alphabet_Declaration" << std::endl;
+  NameList::iterator i;
+  IdentList *symbolsi = new IdentList();
+  int value = 1;
+  for (i = symbols->begin(); i != symbols->end(); i++) {
+    Ident symbolIdent = symbolTable.insertConst(*i, value++); //TODO: better type handling
+    symbolsi->push_back(symbolIdent);
+  }
+
+  Alphabet* a = new Alphabet(symbolsi);
+  symbolTable.insertAlphabet(name, a);
+}
+
+void 
+String_Declaration::genAST(MonaAST &monaAST)
+{
+  IdentList *u = symbolTable.allRealUnivs();
+  Alphabet *a = symbolTable.lookupAlphabet(alph);
+
+  IdentList *varList = new IdentList();
+  IdentList *lenList = new IdentList();
+
+  VarDeclList::iterator d;
+
+  ASTForm *restrictions = new ASTForm_True(dummyPos);
+  ASTForm *lengths = new ASTForm_True(dummyPos);
+  
+  for (d = decls->begin(); d != decls->end(); d++) {
+    MonaString *monaString = createMonaString(a, (*d)->name, (*d)->pos, u, &restrictions, &lengths);
+    lenList->push_back(monaString->length);
+    varList->append(monaString->bits);
+    monaAST.globals.insert(monaString->length);
+    monaAST.globals.append(monaString->bits);
+  }
+
+  ASTForm *res = new ASTForm_And(restrictions, lengths, pos);
+  monaAST.formula = new ASTForm_And(monaAST.formula, res, pos);
+}
+
+void 
+Char_Declaration::genAST(MonaAST &monaAST)
+{
+  VarDeclList::iterator d;
+  IdentList *u = symbolTable.allRealUnivs(); //TODO: univ specification
+  Alphabet *a = symbolTable.lookupAlphabet(alph);
+  
+  for (d = decls->begin(); d != decls->end(); d++) {
+    Ident id1 = symbolTable.insertVar(generateBitName((*d)->name, 0), Varname1, u);
+    MonaChar *ch = new MonaChar();
+    ch->alphabet = a->id;
+    ch->var1id = id1;
+
+    symbolTable.insertMonaChar((*d)->name, ch);
+
+    //value restriction
+    ASTForm *rest = new ASTForm_LessEq(new ASTTerm1_Var1(id1, (*d)->pos), new ASTTerm1_Int(a->symbols->size(), dummyPos), (*d)->pos);
+    monaAST.formula = new ASTForm_And(monaAST.formula, rest, rest->pos);
+
+    monaAST.globals.insert(id1);
+    // TODO where
+  }
+}
+
+//  UntypedExp_AllStr($5, $7, $2, POS(@1));}
+AST*
+UntypedExp_AllStr::genAST()
+{
+  symbolTable.openLocal();
+
+  IdentList *u = symbolTable.allRealUnivs();
+  Alphabet *a = symbolTable.lookupAlphabet(alph);
+
+  IdentList *varList = new IdentList();
+  IdentList *lenList = new IdentList();
+
+  VarDeclList::iterator d;
+
+  ASTForm *restrictions = new ASTForm_True(dummyPos);
+  ASTForm *lengths = new ASTForm_True(dummyPos);
+  
+  for (d = nameList->begin(); d != nameList->end(); d++) {
+    MonaString *monaString = createMonaString(a, (*d)->name, (*d)->pos, u, &restrictions, &lengths, true);
+    lenList->push_back(monaString->length);
+    varList->append(monaString->bits);
+  }
+
+  AST *e = exp->genAST();
+  if (e->order != oForm)
+    TypeError("Type mismatch at allStr", exp->pos);
+
+  ASTForm *form = new ASTForm_Ex1(u, lenList, lengths, pos);
+  form = new ASTForm_Impl(restrictions, new ASTForm_And(form, (ASTForm *) e, pos), pos);
+  form = handleStringIndexing(form, pos);
+  AST *res = new ASTForm_All2(u, varList, form, exp->pos);
+
+  symbolTable.closeLocal();
+
+  return res;
+}
+//  UntypedExp_AllChar($5, $7, $3, POS(@1));}
+AST*
+UntypedExp_AllChar::genAST()
+{
+  symbolTable.openLocal();
+
+  IdentList *u = symbolTable.allRealUnivs();
+  Alphabet *a = symbolTable.lookupAlphabet(alph);
+
+  IdentList *varList = new IdentList();
+  ASTForm *restriction = new ASTForm_True(dummyPos);
+
+  VarDeclList::iterator d;
+  for (d = nameList->begin(); d != nameList->end(); d++) {
+    Name *charName = (*d)->name;
+
+    Ident id1 = symbolTable.insertVar(generateBitName(charName, 0), Varname1, u, true);
+
+    MonaChar *mc = new MonaChar();
+    mc->alphabet = a->id;
+    mc->var1id = id1;
+
+    varList->push_back(id1);
+
+    symbolTable.insertMonaChar(charName, mc, true);
+
+    //value restriction
+    ASTForm *rest = new ASTForm_LessEq(new ASTTerm1_Var1(id1, (*d)->pos), new ASTTerm1_Int(a->symbols->size(), dummyPos), (*d)->pos);
+    restriction = new ASTForm_And(restriction, rest, rest->pos);
+  }
+
+  AST *e = exp->genAST();
+  if (e->order != oForm)
+    TypeError("Type mismatch at allChar", exp->pos);
+
+  ASTForm *form = new ASTForm_Impl(restriction, (ASTForm *) e, e->pos);
+  form = handleStringIndexing(form, pos);
+  AST *res = new ASTForm_All1(u, varList, form, exp->pos);
+
+  symbolTable.closeLocal();
+
+  return res;
+}
+//  UntypedExp_ExStr($5, $7, $3, POS(@1));}
+AST*
+UntypedExp_ExStr::genAST()
+{
+  symbolTable.openLocal();
+
+  IdentList *u = symbolTable.allRealUnivs();
+  Alphabet *a = symbolTable.lookupAlphabet(alph);
+
+  IdentList *varList = new IdentList();
+  IdentList *lenList = new IdentList();
+
+  VarDeclList::iterator d;
+
+  ASTForm *restrictions = new ASTForm_True(dummyPos);
+  ASTForm *lengths = new ASTForm_True(dummyPos);
+  
+  for (d = nameList->begin(); d != nameList->end(); d++) {
+    MonaString *monaString = createMonaString(a, (*d)->name, (*d)->pos, u, &restrictions, &lengths, true);
+    lenList->push_back(monaString->length);
+    varList->append(monaString->bits);
+  }
+
+  AST *e = exp->genAST();
+  if (e->order != oForm)
+    TypeError("Type mismatch at exStr", exp->pos);
+
+  ASTForm *form = new ASTForm_Ex1(u, lenList, lengths, pos);
+  form = new ASTForm_And(restrictions, new ASTForm_And(form, (ASTForm *) e, pos), pos);
+  form = handleStringIndexing(form, pos);
+  AST *res = new ASTForm_Ex2(u, varList, form, exp->pos);
+  symbolTable.closeLocal();
+
+  return res;
+}
+//  UntypedExp_ExChar($5, $7, $3, POS(@1));}
+AST*
+UntypedExp_ExChar::genAST()
+{
+  symbolTable.openLocal();
+
+  IdentList *u = symbolTable.allRealUnivs();
+  Alphabet *a = symbolTable.lookupAlphabet(alph);
+
+  IdentList *varList = new IdentList();
+  ASTForm *restriction = new ASTForm_True(dummyPos);
+
+  VarDeclList::iterator d;
+  for (d = nameList->begin(); d != nameList->end(); d++) {
+    Name *charName = (*d)->name;
+
+    Ident id1 = symbolTable.insertVar(generateBitName(charName, 0), Varname1, u, true);
+
+    MonaChar *mc = new MonaChar();
+    mc->alphabet = a->id;
+    mc->var1id = id1;
+
+    varList->push_back(id1);
+
+    symbolTable.insertMonaChar(charName, mc, true);
+
+    //value restriction
+    ASTForm *rest = new ASTForm_LessEq(new ASTTerm1_Var1(id1, (*d)->pos), new ASTTerm1_Int(a->symbols->size(), dummyPos), (*d)->pos);
+    restriction = new ASTForm_And(restriction, rest, rest->pos);
+  }
+
+  AST *e = exp->genAST();
+  if (e->order != oForm)
+    TypeError("Type mismatch at exChar", exp->pos);
+
+  ASTForm *form = new ASTForm_And((ASTForm *) e, restriction, e->pos);
+  form = handleStringIndexing(form, pos);
+  AST *res = new ASTForm_Ex1(u, varList, form, exp->pos);
+
+  symbolTable.closeLocal();
+
+  return res;
+}
+
+//  UntypedExp_StrLength($3, POS(@1));}
+AST*
+UntypedExp_StrLength::genAST()
+{
+  MonaString *ms = symbolTable.lookupMonaString(name);
+  return new ASTTerm1_Var1(ms->length, pos);
+}
+
+//  UntypedExp_StrIndex($1, $3, POS(@1));}
+AST*
+UntypedExp_StrIndex::genAST()
+{
+  MonaString *ms = symbolTable.lookupMonaString(name);
+  Alphabet *a = symbolTable.lookupAlphabet(ms->alphabet);
+  IdentList *u = symbolTable.allRealUnivs();
+  
+  Ident id = symbolTable.insertFresh(Varname1, u);
+  IdentList *idList = new IdentList();
+  idList->push_back(id);
+
+  AST* expAst = exp->genAST();
+  if (expAst->order != oTerm1)
+    TypeError("Index must be first order term", exp->pos);
+
+  IdentList::iterator i;
+  int bit = 0;
+  ASTForm *form = new ASTForm_True(pos);
+
+  for (i = ms->bits->begin(); i != ms->bits->end(); i++, bit++) {
+    Ident bitId = *i;
+    ASTTerm2 *strTerm = new ASTTerm2_Var2(bitId, exp->pos);
+
+    ASTList *elems = new ASTList();
+    for (int j = 1; j <= a->symbols->size(); j++) {
+      if (j & (1<<(bit)))
+        elems->push_back(new ASTTerm1_Int(j, dummyPos));
+    }
+
+    ASTTerm2 *alpTerm = new ASTTerm2_Set(elems, pos);
+    ASTForm *bitForm = new ASTForm_Biimpl(new ASTForm_In((ASTTerm1 *) exp->genAST(), strTerm, exp->pos), new ASTForm_In(new ASTTerm1_Var1(id, pos), alpTerm, exp->pos), exp->pos);
+    form = new ASTForm_And(form, bitForm, pos);
+  }
+
+  ASTForm *rest = form;
+  rest = new ASTForm_And(rest, new ASTForm_NotEqual1(new ASTTerm1_Var1(id, pos), new ASTTerm1_Int(0, dummyPos), pos), pos);
+  indexForm = new ASTForm_And(indexForm, rest, pos);
+  indexVars->push_back(id);
+
+  return new ASTTerm1_Var1(id, pos);
 }

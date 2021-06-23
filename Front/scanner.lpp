@@ -190,6 +190,16 @@ numeral		[0-9]+
 "tree_root"     SETPOS(1); return tokTREEROOT;
 "restrict"      SETPOS(1); return tokRESTRICT;
 "verify"        SETPOS(1); return tokVERIFY;
+
+"alphabet"      SETPOS(1); return tokALPHABET;
+"length"        SETPOS(1); return tokLENGTH;
+"varStr"        SETPOS(1); return tokVARSTR;
+"allStr"        SETPOS(1); return tokALLSTR;
+"exStr"         SETPOS(1); return tokEXSTR;
+"varChar"       SETPOS(1); return tokVARCH;
+"allChar"       SETPOS(1); return tokALLCH;
+"exChar"        SETPOS(1); return tokEXCH;
+
 \"[^\"\n]*\"    {SETPOS(1); yytext[strlen(yytext)-1] = 0;  
 		 copyString(yytext); return tokSTRING;}
 {numeral}       SETPOS(1); copyString(yytext); return tokINT;

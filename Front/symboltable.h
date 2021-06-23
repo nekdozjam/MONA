@@ -44,7 +44,8 @@ enum MonaTypeTag {
   Varname0, Varname1, Varname2, VarnameTree,
   Parname0, Parname1, Parname2, ParnameU,
   Univname, Predname, Constname, Statespacename,
-  Typename
+  Typename,
+  VarnameStr, VarnameChar, AlphabetTag
 };
 
 class SymbolTable {
@@ -59,6 +60,35 @@ class SymbolTable {
     char       *string;
     MonaTypeTag monaTypeTag;
     Ident       ident;
+  };
+
+  class AlphabetEntry: public Entry {
+  public:
+    AlphabetEntry(char *s, Ident i, Alphabet *a) :
+      Entry(s, AlphabetTag, i), alphabet(a) {}
+    ~AlphabetEntry() {delete alphabet;}
+
+    Alphabet *alphabet;
+  };
+
+  class MonaStringEntry: public Entry {
+  public:
+    MonaStringEntry(char *s, Ident i, MonaString *m, bool f) :
+      Entry(s, VarnameStr, i), monaString(m), implicit(f) {}
+    ~MonaStringEntry() {delete monaString;}
+
+    MonaString *monaString;
+    bool implicit;
+  };
+
+  class MonaCharEntry: public Entry {
+  public:
+    MonaCharEntry(char *s, Ident i, MonaChar *m, bool f) :
+      Entry(s, VarnameChar, i), monaChar(m), implicit(f) {}
+    ~MonaCharEntry() {delete monaChar;}
+
+    MonaChar *monaChar;
+    bool implicit;
   };
 
   class VarEntry: public Entry {
@@ -199,12 +229,26 @@ public:
 
   void        dump(); // dump contents
 
+  
+  
+  Ident insertAlphabet(Name *name, Alphabet *alphabet);
+  Ident insertMonaString(Name *name, MonaString *monaString, bool implicit = false);
+  Ident insertMonaChar(Name *name, MonaChar *monaChar, bool implicit = false);
+  MonaString     *lookupMonaString(Name*);
+  MonaString     *lookupMonaString(Ident);
+  Alphabet       *lookupAlphabet(Name*);
+  Alphabet       *lookupAlphabet(Ident);
+  MonaChar       *lookupMonaChar(Name*);
+  MonaChar       *lookupMonaChar(Ident);
   unsigned  noIdents;       // total number of identifiers
   int       noSS;           // number of state spaces
   Ident     defaultIdent1;  // formal parameter for defaultwhere1
   Ident     defaultIdent2;  // formal parameter for defaultwhere2
   ASTForm  *defaultRestriction1; // default restriction for first order variables
   ASTForm  *defaultRestriction2; // default restriction for second order variables
+
+
+
 };
 
 #endif

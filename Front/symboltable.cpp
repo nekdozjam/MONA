@@ -587,6 +587,15 @@ SymbolTable::dump()
       type = const_cast<char*>("type");
       anyTypes = true;
       break;
+    case VarnameChar:
+      type = const_cast<char*>("char");
+      break;
+    case VarnameStr:
+      type = const_cast<char*>("string");
+      break;
+    case AlphabetTag:
+      type = const_cast<char*>("alphabet");
+      break;
     default:
       invariant(false);
     }
@@ -619,4 +628,111 @@ SymbolTable::dump()
       }
     }
   }
+}
+
+
+//////////////////////////////////////////////////////////
+/////////////////// String Extension /////////////////////
+//////////////////////////////////////////////////////////
+
+///////////////////////////
+// Alphabet
+///////////////////////////
+
+Alphabet*
+SymbolTable::lookupAlphabet(Name *name)
+{
+  Entry &e = lookup(name);
+  if (e.monaTypeTag != AlphabetTag)
+    TypeError("'" + String(name->str) + "' is not an alphabet", name->pos);
+    
+  AlphabetEntry &a = (AlphabetEntry &) e;
+  return a.alphabet;
+}
+
+Alphabet*
+SymbolTable::lookupAlphabet(Ident id)
+{
+  Entry *e = identMap.get(id);
+  if (e->monaTypeTag != AlphabetTag)
+    TypeError("'" + String(id) + "' is not an alphabet", dummyPos);
+  
+  AlphabetEntry *a = (AlphabetEntry *) e;
+  return a->alphabet;
+}
+
+Ident
+SymbolTable::insertAlphabet(Name *name, Alphabet *a)
+{
+  check(name);
+  Ident aid = insert(new AlphabetEntry(name->str, noIdents, a));
+  a->id = aid;
+  return aid;
+}
+
+///////////////////////////
+// String
+///////////////////////////
+
+Ident
+SymbolTable::insertMonaString(Name *name, MonaString *monaString, bool implicit)
+{
+  check(name);
+  return insert(new MonaStringEntry(name->str, noIdents, monaString, implicit));
+}
+
+MonaString*
+SymbolTable::lookupMonaString(Name* name)
+{
+  Entry &e = lookup(name);
+  if (e.monaTypeTag != VarnameStr)
+    TypeError("'" + String(name->str) + "' is not a string", name->pos);
+  
+  MonaStringEntry &s = (MonaStringEntry &) e;
+  return s.monaString;
+}
+
+MonaString*
+SymbolTable::lookupMonaString(Ident id)
+{
+  Entry *e = identMap.get(id);
+  if (e->monaTypeTag != VarnameStr)
+    TypeError("'" + String(id) + "' is not a string", dummyPos);
+  
+  MonaStringEntry *s = (MonaStringEntry *) e;
+  return s->monaString;
+}
+
+
+///////////////////////////
+// Char
+///////////////////////////
+
+Ident
+SymbolTable::insertMonaChar(Name *name, MonaChar *mchar, bool implicit)
+{
+  check(name);
+  return insert(new MonaCharEntry(name->str, noIdents, mchar, implicit));
+}
+
+MonaChar*
+SymbolTable::lookupMonaChar(Name* name)
+{
+  Entry &e = lookup(name);
+  if (e.monaTypeTag != VarnameChar)
+    TypeError("'" + String(name->str) + "' is not a char", name->pos);
+  
+  MonaCharEntry &s = (MonaCharEntry &) e;
+  return s.monaChar;
+}
+
+MonaChar*
+SymbolTable::lookupMonaChar(Ident id)
+{
+  Entry *e = identMap.get(id);
+  if (e->monaTypeTag != VarnameChar)
+    TypeError("'" + String(id) + "' is not a char", dummyPos);
+  
+  MonaCharEntry *s = (MonaCharEntry *) e;
+  return s->monaChar;
 }

@@ -119,7 +119,8 @@ enum UntypedExpNodeKind {
   uMax, uMin, uMinus, uMinusModulo, uMult, uName, uNot, uNotEqual, uNotIn,
   uOr, uPlus, uPlusModulo, uRoot, uSet, uSetminus, uSub, uRestrict,
   uTrue, uUnion, uUp, uImport, uExport, uPrefix, uRootPred, uInStateSpace,
-  uSucc, uWellFormedTree, uType, uSomeType, uVariant, uConstTree, uTreeRoot
+  uSucc, uWellFormedTree, uType, uSomeType, uVariant, uConstTree, uTreeRoot,
+  uAllStr, uExStr, uAllChar, uExChar, uStrLength
 };
 
 class UntypedExp {
@@ -139,7 +140,7 @@ class UntypedExpList: public DequeGC<UntypedExp*> {};
 ////////// Variable declaration ///////////////////////////////////////////////
 
 enum VarDeclKind {
-  vVar0, vVar1, vVar2, vTree 
+  vVar0, vVar1, vVar2, vTree, vChar, vStr 
 };
 
 class VarDecl {
@@ -947,7 +948,7 @@ class UnivList: public DequeGC<Univ*> {};
 ////////// Parameter declaration auxiliary classes ////////////////////////////
 
 enum ParDeclKind {
-  pPar0, pPar1, pPar2, pParU, pPar 
+  pPar0, pPar1, pPar2, pParU, pPar, pParS, pParC
 };
 
 class ParDecl {
@@ -1198,5 +1199,140 @@ public:
 
   DeclarationList *declarations;
 };
+
+
+
+//////////////////////////////////////////////////////////
+/////////////////// String Extension /////////////////////
+//////////////////////////////////////////////////////////
+
+class StrParDecl: public ParDecl {
+public:
+  StrParDecl() {}
+  StrParDecl(Name *n, Name *a, UntypedExp *w, Pos p) : 
+    ParDecl(pParS, n, w, p), alphabet(a) {}
+  ~StrParDecl() {delete alphabet;}
+  
+  Name *alphabet;
+};
+
+class CharParDecl: public ParDecl {
+public:
+  CharParDecl() {}
+  CharParDecl(Name *n, Name *a, UntypedExp *w, Pos p) : 
+    ParDecl(pParC, n, w, p), alphabet(a) {}
+  ~CharParDecl() {delete alphabet;}
+
+  Name *alphabet;
+};
+
+class String_Declaration: public Declaration {
+public:
+  String_Declaration(Name *a, VarDeclList *d, Pos p) :
+    Declaration(dVariable, p), alph(a), decls(d) {}
+  virtual ~String_Declaration() 
+  {delete alph; delete decls;}
+
+  void genAST(MonaAST &monaAST);
+  
+  Name *alph;
+  VarDeclList *decls;
+};
+
+class Char_Declaration: public Declaration {
+public:
+  Char_Declaration(Name *a, VarDeclList *d, Pos p) :
+    Declaration(dVariable, p), alph(a), decls(d) {}
+  virtual ~Char_Declaration() 
+  {delete alph; delete decls;}
+
+  void genAST(MonaAST &monaAST);
+  
+  Name *alph;
+  VarDeclList *decls;
+};
+
+class Alphabet_Declaration: public Declaration {
+public:
+  Alphabet_Declaration(Name *n, NameList *s, Pos p) :
+    Declaration(dVariable, p), name(n), symbols(s) {}
+  virtual ~Alphabet_Declaration() 
+  {delete name; delete symbols;}
+
+  void genAST(MonaAST &monaAST);
+  
+  Name *name;
+  NameList *symbols;
+};
+
+class UntypedExp_ExStr: public UntypedExp_par_npee  {
+public:
+  UntypedExp_ExStr(VarDeclList *d, UntypedExp *exp, Name* a, Pos p) :
+    UntypedExp_par_npee(uExStr, d, exp, p), alph(a) {}  
+  virtual ~UntypedExp_ExStr()
+  {delete alph;}
+
+  AST *genAST();
+  Name *alph;
+};
+
+class UntypedExp_AllStr: public UntypedExp_par_npee  {
+public:
+  UntypedExp_AllStr(VarDeclList *d, UntypedExp *exp, Name* a, Pos p) :
+    UntypedExp_par_npee(uAllStr, d, exp, p), alph(a) {}  
+  virtual ~UntypedExp_AllStr()
+  {delete alph;}
+
+  AST *genAST();
+  Name *alph;
+};
+
+class UntypedExp_ExChar: public UntypedExp_par_npee  {
+public:
+  UntypedExp_ExChar(VarDeclList *d, UntypedExp *exp, Name* a, Pos p) :
+    UntypedExp_par_npee(uExChar, d, exp, p), alph(a) {}  
+  virtual ~UntypedExp_ExChar()
+  {delete alph;}
+
+  AST *genAST();
+  Name *alph;
+};
+
+class UntypedExp_AllChar: public UntypedExp_par_npee  {
+public:
+  UntypedExp_AllChar(VarDeclList *d, UntypedExp *exp, Name* a, Pos p) :
+    UntypedExp_par_npee(uAllChar, d, exp, p), alph(a) {}  
+  virtual ~UntypedExp_AllChar()
+  {delete alph;}
+
+  AST *genAST();
+  Name *alph;
+};
+
+class UntypedExp_StrLength: public UntypedExp  {
+public:
+  UntypedExp_StrLength(Name *n, Pos p) :
+    UntypedExp(uStrLength, p), name(n) {}  
+  virtual ~UntypedExp_StrLength()
+  {delete name;}
+
+  AST *genAST();
+  Name *name;
+};
+
+class UntypedExp_StrIndex: public UntypedExp_par_e  {
+public:
+  UntypedExp_StrIndex(Name *n, UntypedExp *exp, Pos p) :
+    UntypedExp_par_e(uStrLength, exp, p), name(n) {}  
+  virtual ~UntypedExp_StrIndex()
+  {delete name;}
+
+  AST *genAST();
+  Name *name;
+};
+
+//////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////
 
 #endif

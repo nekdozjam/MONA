@@ -24,6 +24,7 @@
 #include "ident.h"
 #include "codetable.h"
 #include "printline.h"
+#include "ast_str.h"
 
 ////////// Bit list ///////////////////////////////////////////////////////////
 
@@ -79,10 +80,10 @@ enum ASTKind {
   aEx2, aAll0, aAll1, aAll2, aLet0, aLet1, aLet2, aCall, 
   aUniv, aImport, aExport, aPrefix, aDot2, aUp2, aRootPred, aInStateSpace1,
   aInStateSpace2, aTreeRoot, aWellFormedTree, aTree, aTerm2Formula, 
-  aSomeType, aRestrict
+  aSomeType, aRestrict, aStringName
 };
 
-enum ASTOrder {oTerm1, oTerm2, oForm, oUniv};
+enum ASTOrder {oTerm1, oTerm2, oForm, oUniv, oString};
 
 class AST {
 public:
@@ -97,6 +98,14 @@ public:
   ASTKind kind;
   Pos pos;
 }; 
+
+class ASTString_Name: public AST {
+public:
+  ASTString_Name(Ident i, Pos pos) :
+    AST(oString, aStringName, pos), ident(i) {}
+  
+  Ident ident;
+};
 
 class ASTList: public DequeGC<AST*> {
 public:
